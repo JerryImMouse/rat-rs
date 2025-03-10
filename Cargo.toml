@@ -1,0 +1,8 @@
+[package]
+name = "rat"
+version = "0.1.0"
+edition = "2021"
+authors = ['JerryImMouse']
+repository = "https://github.com/JerryImMouse/rat-rs"
+license-file = "./LICENSE"
+readme = "README.md"
