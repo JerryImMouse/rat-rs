@@ -307,7 +307,6 @@ impl<T: Write> Rat<T> {
                             prev_prev_byte = prev_byte;
                             prev_byte = *byte;
                         }
-                        self.write_to.flush().unwrap();
                     }
                     Err(e) => {
                         error(&format!("{}: {}", src, e));
@@ -315,6 +314,7 @@ impl<T: Write> Rat<T> {
                     }
                 }
             }
+            self.write_to.flush().unwrap();
         });
         self
     }
