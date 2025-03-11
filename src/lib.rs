@@ -274,30 +274,47 @@ impl<T: Write> Rat<T> {
                     Ok(size) => {
                         let mut out_buf = [0u8; IO_BUFSIZE];
                         let mut out_pos = 0;
-                        for &byte in &buf[..size] {
+                        for byte in &mut buf[..size] {
                             if out_pos >= out_buf.len() {
                                 self.write_to.write_all(&out_buf[..out_pos]).unwrap();
-                                out_pos = 0; // Reset position after flush
+                                out_pos = 0; // Reset after flush
                             }
-
-                            if self.args.squeeze_blank && byte == b'\n' && prev_byte == b'\n' && prev_prev_byte == b'\n' {
+        
+                            if self.args.squeeze_blank && *byte == b'\n' && prev_byte == b'\n' && prev_prev_byte == b'\n' {
                                 continue;
                             }
-                            if ((self.args.number_lines && !self.args.number_nonblank) || (self.args.number_nonblank && byte != b'\n')) && prev_byte == b'\n' {
+                            if ((self.args.number_lines && !self.args.number_nonblank) || (self.args.number_nonblank && *byte != b'\n')) && prev_byte == b'\n' {
                                 let num = format!("{index:6} ");
-                                out_buf[out_pos..out_pos+num.len()].copy_from_slice(num.as_bytes());
+                                out_buf[out_pos..out_pos + num.len()].copy_from_slice(num.as_bytes());
                                 out_pos += num.len();
                                 index += 1;
                             }
-                            if self.args.show_tabs && byte == b'\t' {
-                                out_buf[out_pos..out_pos+2].copy_from_slice(b"^I");
+        
+                            if self.args.show_nonprinting {
+                                if *byte >= 128 {
+                                    out_buf[out_pos..out_pos + 2].copy_from_slice(b"M-");
+                                    out_pos += 2;
+                                    *byte -= 128;
+                                }
+        
+                                if *byte < 32 || *byte == 127 {
+                                    out_buf[out_pos] = b'^';
+                                    out_buf[out_pos + 1] = *byte ^ 0x40;
+                                    out_pos += 2;
+                                    continue;
+                                }
+                            }
+        
+                            if self.args.show_tabs && *byte == b'\t' {
+                                out_buf[out_pos..out_pos + 2].copy_from_slice(b"^I");
                                 out_pos += 2;
                             } else {
-                                out_buf[out_pos] = byte;
+                                out_buf[out_pos] = *byte;
                                 out_pos += 1;
                             }
+        
                             prev_prev_byte = prev_byte;
-                            prev_byte = byte;
+                            prev_byte = *byte;
                         }
                         self.write_to.write_all(&out_buf[..out_pos]).unwrap();
                     }
@@ -307,10 +324,6 @@ impl<T: Write> Rat<T> {
         }
         self
     }
-}
-
-fn error(msg: &str) {
-    eprintln!("rat: {}", msg);
 }
 
 #[cfg(test)]
