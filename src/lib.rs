@@ -5,6 +5,8 @@
 
 use std::io::{Read, Write};
 
+static IO_BUFSIZE: usize = 512 * 1024;
+
 const RAT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const RAT_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -41,7 +43,7 @@ enum Source {
 }
 
 impl Source {
-    fn read_to_buf(&mut self, buf: &mut Vec<u8>) -> Result<usize, std::io::Error> {
+    fn read_to_buf(&mut self, buf: &mut [u8]) -> Result<usize, std::io::Error> {
         match self {
             Source::File(path, file_option) => {
                 if file_option.is_none() {
@@ -50,19 +52,17 @@ impl Source {
                 }
 
                 let file = file_option.as_mut().unwrap();
-                let mut temp_buf = [0; 512];
 
-                let bytes_read = file.read(&mut temp_buf)?;
-                buf.extend_from_slice(&temp_buf[..bytes_read]);
+                let bytes_read = file.read(buf)?;
                 Ok(bytes_read)
             }
             Source::Stdin(stdin) => {
-                let mut line = String::new();
-                let bytes_read = stdin.read_line(&mut line)?;
-                
-                buf.clear();
-                buf.extend_from_slice(line.as_bytes());
-                
+                let bytes_read = stdin.read(buf)?;
+    
+                if bytes_read == 0 {
+                    return Ok(0); // Properly handle EOF
+                }
+
                 Ok(bytes_read)
             },
             #[cfg(test)]
@@ -79,7 +79,8 @@ impl Source {
                 }
             
                 let line = &lines[*pos];
-                buf.extend_from_slice(line.as_bytes());
+                
+                // TODO
                 *pos += 1;
             
                 Ok(line.len())
@@ -122,6 +123,14 @@ pub struct RatArgs {
 }
 
 impl RatArgs {
+    pub fn files(files: Vec<String>) -> Self {
+        let files = files.iter().map(|f| Source::File(f.to_string(), None)).collect();
+        Self {
+            files,
+            ..Self::default()
+        }
+    }
+
     pub fn new(raw: Vec<String>) -> Self {
         let slice = &raw[1..];
         let mut rat_args = RatArgs::default();
@@ -252,70 +261,50 @@ impl<T: Write> Rat<T> {
         let mut index = 1u64;
 
         let mut prev_byte = b'\n';
+        let mut buf = [0u8; IO_BUFSIZE];
 
         // i should explain now, this one exists because of -s flag
         // in original cat.c its logic implented via counting newlines, but i think this is more simple
         let mut prev_prev_byte = b' ';
 
-        args.files.iter_mut().for_each(|src| {
-            let mut buf = Vec::<u8>::with_capacity(512);
+        for source in self.args.files.iter_mut() {
             loop {
-                match src.read_to_buf(&mut buf) {
-                    Ok(0) => {
-                        break;
-                    },
-                    Ok(_) => {
-                        for byte in &mut buf {
-                            // squeeze blank lines
-                            if args.squeeze_blank && *byte == b'\n' && prev_byte == b'\n' && prev_prev_byte == b'\n' {
-                                prev_prev_byte = prev_byte;
-                                prev_byte = *byte;
-                                continue;
+                match source.read_to_buf(&mut buf) {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        let mut out_buf = [0u8; IO_BUFSIZE];
+                        let mut out_pos = 0;
+                        for &byte in &buf[..size] {
+                            if out_pos >= out_buf.len() {
+                                self.write_to.write_all(&out_buf[..out_pos]).unwrap();
+                                out_pos = 0; // Reset position after flush
                             }
 
-                            // output line number
-                            if ((args.number_lines && !args.number_nonblank) || (args.number_nonblank && *byte != b'\n')) && prev_byte == b'\n' {
-                                write!(self.write_to, "{:6}  ", index).unwrap();
+                            if self.args.squeeze_blank && byte == b'\n' && prev_byte == b'\n' && prev_prev_byte == b'\n' {
+                                continue;
+                            }
+                            if ((self.args.number_lines && !self.args.number_nonblank) || (self.args.number_nonblank && byte != b'\n')) && prev_byte == b'\n' {
+                                let num = format!("{index:6} ");
+                                out_buf[out_pos..out_pos+num.len()].copy_from_slice(num.as_bytes());
+                                out_pos += num.len();
                                 index += 1;
                             }
-
-                            if args.show_tabs && *byte == b'\t' {
-                                write!(self.write_to, "^I").unwrap();
-                                prev_prev_byte = prev_byte;
-                                prev_byte = *byte;
-                                continue;
+                            if self.args.show_tabs && byte == b'\t' {
+                                out_buf[out_pos..out_pos+2].copy_from_slice(b"^I");
+                                out_pos += 2;
+                            } else {
+                                out_buf[out_pos] = byte;
+                                out_pos += 1;
                             }
-
-                            if args.show_ends && *byte == b'\n' {
-                                write!(self.write_to, "$").unwrap();
-                            }
-
-                            // https://stackoverflow.com/questions/44694331/what-is-the-m-notation-and-where-is-it-documented
-                            if args.show_nonprinting {
-                                if *byte >= 128 {
-                                    self.write_to.write_all(b"M-").unwrap();
-                                    *byte -= 128;
-                                }
-                                
-                                if *byte < 32 || *byte == 127 {
-                                    self.write_to.write_all(b"^").unwrap();
-                                    *byte ^= 0x40;
-                                }
-                            }
-
-                            self.write_to.write_all(&[*byte]).unwrap();
                             prev_prev_byte = prev_byte;
-                            prev_byte = *byte;
+                            prev_byte = byte;
                         }
+                        self.write_to.write_all(&out_buf[..out_pos]).unwrap();
                     }
-                    Err(e) => {
-                        error(&format!("{}: {}", src, e));
-                        break;
-                    }
+                    Err(_) => break,
                 }
             }
-            self.write_to.flush().unwrap();
-        });
+        }
         self
     }
 }
