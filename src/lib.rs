@@ -142,7 +142,7 @@ impl RatArgs {
         }
 
         slice.iter().for_each(|arg| {
-            if arg.contains("--") {
+            if arg.contains("--") && &arg[1..=2] == "--" {
                 match arg.as_str() {
                     "--help" => 
                         rat_args.help = true,
@@ -179,7 +179,7 @@ impl RatArgs {
             } else if arg == "-" && arg.len() == 1 {
                 // stdin source is here baby
                 rat_args.files.push(Source::Stdin(std::io::stdin()));
-            } else if arg.contains("-") {
+            } else if arg.contains("-") && arg.chars().nth(0).unwrap() == '-' {
                 // get all chars as vec
                 let chars = arg[1..].chars();
                 chars.for_each(|c| {
